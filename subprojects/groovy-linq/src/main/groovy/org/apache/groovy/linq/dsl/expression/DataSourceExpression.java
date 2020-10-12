@@ -26,8 +26,8 @@ import org.codehaus.groovy.ast.expr.Expression;
  * @since 4.0.0
  */
 public abstract class DataSourceExpression extends AbstractGinqExpression {
-    protected Expression aliasExpr;
-    protected Expression dataSourceExpr;
+    protected final Expression aliasExpr;
+    protected final Expression dataSourceExpr;
     protected WhereExpression whereExpression;
     protected GroupExpression groupExpression;
     protected OrderExpression orderExpression;
