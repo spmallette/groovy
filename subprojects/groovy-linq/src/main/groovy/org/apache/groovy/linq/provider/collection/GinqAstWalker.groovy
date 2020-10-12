@@ -366,19 +366,12 @@ class GinqAstWalker implements GinqVisitor<Object>, SyntaxErrorReportable {
         boolean isGroup = isGroupByVisited()
         boolean isJoin = dataSourceExpression instanceof JoinExpression
 
-        def correctVars = { Expression expression ->
-            if (expression instanceof VariableExpression) {
-                Expression transformedExpression = null
+        def correctVarsForJoin = { Expression expression ->
+            if (!isJoin) return expression
 
-                if (isGroup) { //  groupby
-                    // in #1, we will correct receiver of built-in aggregate functions
-                    // the correct receiver is `__t.v2`, so we should not replace `__t` here
-                    if (__T != expression.text) {
-                        // replace `gk` in the groupby with `__t.v1.gk`, note: __t.v1 stores the group key
-                        transformedExpression = propX(propX(new VariableExpression(__T), 'v1'), expression.text)
-                    }
-                } else if (isJoin) {
-                    /*
+            Expression transformedExpression = null
+
+            /*
                      * `n1`(`from` node) join `n2` join `n3`  will construct a join tree:
                      *
                      *  __t (join node)
@@ -394,26 +387,39 @@ class GinqAstWalker implements GinqVisitor<Object>, SyntaxErrorReportable {
                      *
                      * The following code shows how to construct the access path for variables
                      */
-                    def prop = new VariableExpression(__T)
-                    for (DataSourceExpression dse = dataSourceExpression;
-                         null == transformedExpression && dse instanceof JoinExpression;
-                         dse = dse.getNodeMetaData(__DATA_SOURCE_EXPRESSION)) {
+            Expression prop = isGroup ? propX(new VariableExpression(__T), 'v1') : new VariableExpression(__T)
+            for (DataSourceExpression dse = dataSourceExpression;
+                 null == transformedExpression && dse instanceof JoinExpression;
+                 dse = dse.getNodeMetaData(__DATA_SOURCE_EXPRESSION)) {
 
-                        DataSourceExpression otherDataSourceExpression = dse.getNodeMetaData(__DATA_SOURCE_EXPRESSION)
-                        Expression firstAliasExpr = otherDataSourceExpression?.aliasExpr ?: EmptyExpression.INSTANCE
-                        Expression secondAliasExpr = dse.aliasExpr
+                DataSourceExpression otherDataSourceExpression = dse.getNodeMetaData(__DATA_SOURCE_EXPRESSION)
+                Expression firstAliasExpr = otherDataSourceExpression?.aliasExpr ?: EmptyExpression.INSTANCE
+                Expression secondAliasExpr = dse.aliasExpr
 
-                        if (firstAliasExpr.text == expression.text && otherDataSourceExpression !instanceof JoinExpression) {
-                            transformedExpression = propX(prop, 'v1')
-                        } else if (secondAliasExpr.text == expression.text) {
-                            transformedExpression = propX(prop, 'v2')
-                        } else { // not found
-                            prop = propX(prop, 'v1')
-                        }
-                    }
+                if (firstAliasExpr.text == expression.text && otherDataSourceExpression !instanceof JoinExpression) {
+                    transformedExpression = propX(prop, 'v1')
+                } else if (secondAliasExpr.text == expression.text) {
+                    transformedExpression = propX(prop, 'v2')
+                } else { // not found
+                    prop = propX(prop, 'v1')
                 }
-                if (null != transformedExpression) {
-                    return transformedExpression
+            }
+
+            return transformedExpression
+        }
+
+        def correctVars = { Expression expression ->
+            Expression transformedExpression = null
+            if (expression instanceof VariableExpression) {
+                if (isGroup) { //  groupby
+                    // in #1, we will correct receiver of built-in aggregate functions
+                    // the correct receiver is `__t.v2`, so we should not replace `__t` here
+                    if (__T != expression.text) {
+                        // replace `gk` in the groupby with `__t.v1.gk`, note: __t.v1 stores the group key
+                        transformedExpression = propX(propX(new VariableExpression(__T), 'v1'), expression.text)
+                    }
+                } else if (isJoin) {
+                    transformedExpression = correctVarsForJoin(expression)
                 }
             } else if (expression instanceof MethodCallExpression) {
                 // #1
@@ -422,10 +428,14 @@ class GinqAstWalker implements GinqVisitor<Object>, SyntaxErrorReportable {
                         String methodName = expression.methodAsString
                         if ('count' == methodName && ((TupleExpression) expression.arguments).getExpressions().isEmpty()) {
                             expression.objectExpression = propX(new VariableExpression(__T), 'v2')
-                            return expression
+                            transformedExpression = expression
                         }
                     }
                 }
+            }
+
+            if (null != transformedExpression) {
+                return transformedExpression
             }
 
             return expression
